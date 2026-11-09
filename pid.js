@@ -1,12 +1,13 @@
 // ─── Default parameter values ────────────────────────────────────────────────
 // Plant: mass m (kg), spring constant k (N/m), damping coefficient c (N·s/m),
-//        constant disturbance force f (N).
+//        step disturbance force f (N) that starts at time tf (s).
 // Controller: proportional Kp, integral Ki, derivative Kd gains.
 const defaults = {
   m: 1,
   k: 0,
   c: 3,
   f: 0,
+  tf: 6,
   kp: 0,
   ki: 0,
   kd: 0
@@ -19,6 +20,7 @@ const sliders = {
   k: document.getElementById("k"),
   c: document.getElementById("c"),
   f: document.getElementById("f"),
+  tf: document.getElementById("tf"),
   kp: document.getElementById("kp"),
   ki: document.getElementById("ki"),
   kd: document.getElementById("kd")
@@ -30,6 +32,7 @@ const outputs = {
   k: document.getElementById("kOut"),
   c: document.getElementById("cOut"),
   f: document.getElementById("fOut"),
+  tf: document.getElementById("tfOut"),
   kp: document.getElementById("kpOut"),
   ki: document.getElementById("kiOut"),
   kd: document.getElementById("kdOut")
@@ -66,6 +69,7 @@ function getParams() {
     k: Number(sliders.k.value),
     c: Number(sliders.c.value),
     f: Number(sliders.f.value),
+    tf: Number(sliders.tf.value),
     kp: Number(sliders.kp.value),
     ki: Number(sliders.ki.value),
     kd: Number(sliders.kd.value)
@@ -78,6 +82,7 @@ function updateValueLabels(p) {
   outputs.k.innerHTML = `${p.k.toFixed(2)} <span class="unit">N/m</span>`;
   outputs.c.innerHTML = `${p.c.toFixed(2)} <span class="unit">N·s/m</span>`;
   outputs.f.innerHTML = `${p.f.toFixed(2)} <span class="unit">N</span>`;
+  outputs.tf.innerHTML = `${p.tf.toFixed(2)} <span class="unit">s</span>`;
   outputs.kp.textContent = p.kp.toFixed(2);
   outputs.ki.textContent = p.ki.toFixed(2);
   outputs.kd.textContent = p.kd.toFixed(2);
@@ -104,22 +109,12 @@ function closedLoopStability(p) {
   return margin > 0 ? "stable" : "unstable";
 }
 
-// The state the loop rests in before the step (r = 0) under the constant force F:
-//   Ki > 0           : x = 0, and the integrator already cancels F.
-//   Ki = 0, k+Kp > 0 : x = F / (k+Kp), a static offset.
-//   otherwise        : no equilibrium exists; F is held off until the step.
-function preStepEquilibrium(p) {
-  if (p.ki > 0) return { x: 0, integral: -p.f / p.ki, exists: true };
-  const stiffness = p.k + p.kp;
-  if (stiffness > 0) return { x: p.f / stiffness, integral: 0, exists: true };
-  return { x: 0, integral: 0, exists: false };
-}
-
 // Simulate the closed-loop step response using semi-implicit (symplectic) Euler
-// integration, starting from the pre-step equilibrium.
+// integration, starting at rest.
 //
 // Plant model (mass-spring-damper):
 //   m·ẍ + c·ẋ + k·x = u + f
+//   where f is a step disturbance of size F that starts at t = tF.
 //
 // Parallel PID controller:
 //   u = Kp·e + Ki·∫e dt - Kd·(dy/dt)
@@ -137,22 +132,22 @@ function simulateStepResponse(params) {
   const subSteps = 10; // integration sub-steps per plotted sample
   const h = dt / subSteps;
   const n = Math.floor((tEnd - tStart) / dt) + 1;
-  const stepIndex = Math.round(-tStart / dt); // sample at which the step occurs
+  const stepIndex = Math.round(-tStart / dt); // sample at which the reference steps
+  const forceIndex = Math.round((params.tf - tStart) / dt); // sample at which the force starts
 
   const time = new Array(n);
   const y = new Array(n);
   const ref = new Array(n);
 
-  const equilibrium = preStepEquilibrium(params);
-  let x = equilibrium.x;
+  let x = 0;
   let v = 0;
-  let integral = equilibrium.integral;
+  let integral = 0;
 
   const maxAbsState = 1e4; // stop integrating beyond this; the plot would be meaningless
 
   for (let i = 0; i < n; i += 1) {
     const r = i >= stepIndex ? 1 : 0;
-    const f = equilibrium.exists || i >= stepIndex ? params.f : 0;
+    const f = i >= forceIndex ? params.f : 0;
 
     time[i] = tStart + i * dt;
     y[i] = x;
@@ -184,41 +179,40 @@ function simulateStepResponse(params) {
 
 // ─── Step-response metrics ───────────────────────────────────────────────────
 
-// Compute standard step-response performance metrics, using only samples from
-// the step onwards. y0 is the pre-step value and yFinal the exact steady state,
-// so the step size is Δ = yFinal − y0:
-//   Rise time    : time for output to go from 10 % to 90 % of Δ.
-//   Overshoot    : peak above yFinal, as % of Δ.
-//   Settling time: time after which the output stays within ±2 % of Δ around yFinal.
-//   SSE          : absolute steady-state error |1 − yFinal|.
+// Compute standard step-response performance metrics. Pass the response to the
+// reference step alone (F = 0), so a force disturbance does not distort them.
+// yFinal is the exact steady state of that response:
+//   Rise time    : time for output to go from 10 % to 90 % of yFinal.
+//   Overshoot    : peak above yFinal, as % of yFinal.
+//   Settling time: time after which the output stays within ±2 % of yFinal.
+//   SSE          : absolute steady-state error |1 − y(∞)|, including the force F.
 // All are unavailable (null) when the loop has no steady state, and all but SSE
 // when the reference is not connected (Kp = Ki = 0).
 function computeMetrics(time, y, params) {
   const metrics = { riseTime: null, overshoot: null, settlingTime: null, sse: null };
   if (closedLoopStability(params) !== "stable") return metrics;
 
-  const yFinal = params.ki > 0 ? 1 : (params.kp + params.f) / (params.k + params.kp);
-  metrics.sse = Math.abs(1 - yFinal);
+  const yWithForce = params.ki > 0 ? 1 : (params.kp + params.f) / (params.k + params.kp);
+  metrics.sse = Math.abs(1 - yWithForce);
   if (params.kp === 0 && params.ki === 0) return metrics;
 
-  const y0 = preStepEquilibrium(params).x;
-  const delta = yFinal - y0;
+  const yFinal = params.ki > 0 ? 1 : params.kp / (params.k + params.kp);
   const first = time.findIndex((t) => t >= -1e-9);
 
   let t10 = null;
   let t90 = null;
   let yPeak = -Infinity;
   for (let i = first; i < y.length; i += 1) {
-    if (t10 === null && y[i] >= y0 + 0.1 * delta) t10 = time[i];
-    if (t90 === null && y[i] >= y0 + 0.9 * delta) t90 = time[i];
+    if (t10 === null && y[i] >= 0.1 * yFinal) t10 = time[i];
+    if (t90 === null && y[i] >= 0.9 * yFinal) t90 = time[i];
     if (y[i] > yPeak) yPeak = y[i];
   }
   if (t10 !== null && t90 !== null) metrics.riseTime = t90 - t10;
-  metrics.overshoot = (Math.max(0, yPeak - yFinal) / delta) * 100;
+  metrics.overshoot = (Math.max(0, yPeak - yFinal) / yFinal) * 100;
 
   // Walk back from the end to the last sample outside the settling band.
   // If the very last sample is still outside, the settling time stays null.
-  const band = 0.02 * delta;
+  const band = 0.02 * yFinal;
   for (let i = y.length - 1; i >= first; i -= 1) {
     if (Math.abs(y[i] - yFinal) > band) {
       if (i < y.length - 1) metrics.settlingTime = time[i + 1];
@@ -506,7 +500,8 @@ function updateAll() {
   drawPlot(sim.time, sim.ref, sim.y, autoScaleYEl.checked);
   const zeta = computeClosedLoopDampingRatio(p);
 
-  const m = computeMetrics(sim.time, sim.y, p);
+  const refSim = p.f === 0 ? sim : simulateStepResponse({ ...p, f: 0 });
+  const m = computeMetrics(refSim.time, refSim.y, p);
   metricsEl.rise.textContent = formatMetric(m.riseTime, " s");
   metricsEl.overshoot.textContent = formatMetric(m.overshoot, " %", 2);
   metricsEl.settling.textContent = formatMetric(m.settlingTime, " s");

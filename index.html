@@ -45,10 +45,16 @@
           <input id="c" type="range" min="0" max="20" step="0.01" value="3" />
         </div>
 
-        <!-- F: constant disturbance force (N) — useful for testing steady-state error with Ki=0 -->
+        <!-- F: step disturbance force (N) — shows disturbance rejection; with Ki=0 it leaves a steady-state error -->
         <div class="slider-row">
-          <div class="slider-head"><span>F (constant force)</span><span id="fOut">0.00 <span class="unit">N</span></span></div>
+          <div class="slider-head"><span>F (step force)</span><span id="fOut">0.00 <span class="unit">N</span></span></div>
           <input id="f" type="range" min="-40" max="40" step="0.1" value="0" />
+        </div>
+
+        <!-- tF: time at which the step force F starts -->
+        <div class="slider-row">
+          <div class="slider-head"><span>tF (force start)</span><span id="tfOut">6.00 <span class="unit">s</span></span></div>
+          <input id="tf" type="range" min="0" max="11" step="0.1" value="6" />
         </div>
       </fieldset>
 
@@ -117,7 +123,7 @@
   </div>
 
   <!-- Footer disclaimer -->
-  <p class="page-note">Controller: u = Kp·e + Ki·∫e dt − Kd·dy/dt (the derivative acts on the output, not on the error). F acts continuously, also before the step. Created for Embedded Systems Laboratory course; University of Twente. Use with caution: step response may not be accurate. Validate with a proper simulation program such as 20-sim or Matlab.</p>
+  <p class="page-note">Controller: u = Kp·e + Ki·∫e dt − Kd·dy/dt (the derivative acts on the output, not on the error). F is a step force that starts at tF. Rise time, overshoot and settling time describe the reference step alone; steady-state error includes F. Created for Embedded Systems Laboratory course; University of Twente. Use with caution: step response may not be accurate. Validate with a proper simulation program such as 20-sim or Matlab.</p>
 
   <!-- All simulation logic, DOM wiring, and chart rendering live in pid.js -->
   <script src="pid.js"></script>
