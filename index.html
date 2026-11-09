@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<!-- Written by Vincent Groenhuis
+   With help of Github Copilot to auto-generate most code, under supervision of Vincent.
+   May 10, 2026
+-->
+
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PID Step Response Tuner</title>
+  <!-- All visual styling is in style.css -->
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Two-column layout: left = controls, right = chart -->
+  <div class="app">
+
+    <!-- ── Left panel: slider controls ─────────────────────────────────── -->
+    <section class="panel controls" aria-label="PID and Plant Controls">
+      <header>
+        <h1 class="title">PID Step Response Tuner</h1>
+        <p class="subtitle">Mass-Spring-Damper Plant with Parallel PID Controller</p>
+      </header>
+
+      <!-- Plant parameters: m·ẍ + c·ẋ + k·x = u + F -->
+      <fieldset>
+        <legend>Plant Parameters</legend>
+
+        <!-- m: mass (kg) — affects inertia; higher m slows the response -->
+        <div class="slider-row">
+          <div class="slider-head"><span>m (mass)</span><span id="mOut">1.00 <span class="unit">kg</span></span></div>
+          <input id="m" type="range" min="0.2" max="8" step="0.01" value="1" />
+        </div>
+
+        <!-- k: spring constant (N/m) — restoring force; 0 = free mass (integrating plant) -->
+        <div class="slider-row">
+          <div class="slider-head"><span>k (spring)</span><span id="kOut">0.00 <span class="unit">N/m</span></span></div>
+          <input id="k" type="range" min="0" max="100" step="0.1" value="0" />
+        </div>
+
+        <!-- c: viscous damping (N·s/m) — dissipates energy; reduces oscillation -->
+        <div class="slider-row">
+          <div class="slider-head"><span>c (damping)</span><span id="cOut">3.00 <span class="unit">N·s/m</span></span></div>
+          <input id="c" type="range" min="0" max="20" step="0.01" value="3" />
+        </div>
+
+        <!-- F: constant disturbance force (N) — useful for testing steady-state error with Ki=0 -->
+        <div class="slider-row">
+          <div class="slider-head"><span>F (constant force)</span><span id="fOut">0.00 <span class="unit">N</span></span></div>
+          <input id="f" type="range" min="-40" max="40" step="0.1" value="0" />
+        </div>
+      </fieldset>
+
+      <!-- PID gains: u = Kp·e + Ki·∫e dt + Kd·ė -->
+      <fieldset>
+        <legend>PID Parameters</legend>
+
+        <!-- Kp: proportional gain — speeds up response, may increase overshoot -->
+        <div class="slider-row">
+          <div class="slider-head"><span>Kp</span><span id="kpOut">0.00</span></div>
+          <input id="kp" type="range" min="0" max="250" step="0.1" value="0" />
+        </div>
+
+        <!-- Ki: integral gain — eliminates steady-state error, may cause windup/oscillation -->
+        <div class="slider-row">
+          <div class="slider-head"><span>Ki</span><span id="kiOut">0.00</span></div>
+          <input id="ki" type="range" min="0" max="250" step="0.1" value="0" />
+        </div>
+
+        <!-- Kd: derivative gain — damps oscillation, amplifies noise (low-pass filtered internally) -->
+        <div class="slider-row">
+          <div class="slider-head"><span>Kd</span><span id="kdOut">0.00</span></div>
+          <input id="kd" type="range" min="0" max="80" step="0.05" value="0" />
+        </div>
+      </fieldset>
+
+      <!-- Reset all sliders to the default values defined in pid.js -->
+      <div class="actions">
+        <button id="resetBtn" type="button">Reset Defaults</button>
+      </div>
+
+      <!-- When checked, Y-axis scales to the data range; otherwise fixed to [-0.5, 1.5] -->
+      <label class="toggle-row" for="autoScaleY">
+        <input id="autoScaleY" type="checkbox" />
+        <span>Auto adjust Y-axis scale</span>
+      </label>
+    </section>
+
+    <!-- ── Right panel: chart and metrics ──────────────────────────────── -->
+    <section class="panel viz" aria-label="Step Response Visualization">
+
+      <!-- Colour legend for the two plotted curves -->
+      <div class="legend" aria-hidden="true">
+        <span><span class="legend-dot" style="background: var(--line-ref)"></span>Reference Step</span>
+        <span><span class="legend-dot" style="background: var(--line-out)"></span>Output Response y(t)</span>
+      </div>
+
+      <!-- Canvas element drawn by drawPlot() in pid.js -->
+      <div class="chart-wrap">
+        <canvas id="chart" width="900" height="380"></canvas>
+      </div>
+
+      <!-- Performance metrics grid — populated by updateAll() in pid.js -->
+      <div class="metrics">
+        <div class="metric"><label>Rise Time</label><strong id="riseTime">-</strong></div>
+        <div class="metric"><label>Overshoot</label><strong id="overshoot">-</strong></div>
+        <div class="metric"><label>Settling Time</label><strong id="settlingTime">-</strong></div>
+        <div class="metric"><label>Steady-State Error</label><strong id="sse">-</strong></div>
+        <div class="metric"><label>Damping Ratio</label><strong id="dampingRatio">-</strong></div>
+        <div class="metric"><label>Damping Type</label><strong id="dampingType">-</strong></div>
+      </div>
+
+      <!-- Warning banner shown when the simulation detects a divergent response -->
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+    </section>
+  </div>
+
+  <!-- Footer disclaimer -->
+  <p class="page-note">Created for Embedded Systems Laboratory course; University of Twente. Use with caution: step response may not be accurate. Validate with a proper simulation program such as 20-sim or Matlab.</p>
+
+  <!-- All simulation logic, DOM wiring, and chart rendering live in pid.js -->
+  <script src="pid.js"></script>
+</body>
+</html>
