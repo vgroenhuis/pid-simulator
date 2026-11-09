@@ -7,7 +7,7 @@ const defaults = {
   k: 0,
   c: 3,
   f: 0,
-  tf: 6,
+  tf: 0,
   kp: 0,
   ki: 0,
   kd: 0
