@@ -52,7 +52,7 @@
         </div>
       </fieldset>
 
-      <!-- PID gains: u = Kp·e + Ki·∫e dt + Kd·ė -->
+      <!-- PID gains: u = Kp·e + Ki·∫e dt − Kd·ẏ (derivative acts on the output) -->
       <fieldset>
         <legend>PID Parameters</legend>
 
@@ -62,13 +62,13 @@
           <input id="kp" type="range" min="0" max="250" step="0.1" value="0" />
         </div>
 
-        <!-- Ki: integral gain — eliminates steady-state error, may cause windup/oscillation -->
+        <!-- Ki: integral gain — eliminates steady-state error, may cause oscillation -->
         <div class="slider-row">
           <div class="slider-head"><span>Ki</span><span id="kiOut">0.00</span></div>
           <input id="ki" type="range" min="0" max="250" step="0.1" value="0" />
         </div>
 
-        <!-- Kd: derivative gain — damps oscillation, amplifies noise (low-pass filtered internally) -->
+        <!-- Kd: derivative gain — damps oscillation; acts on the output y, unfiltered -->
         <div class="slider-row">
           <div class="slider-head"><span>Kd</span><span id="kdOut">0.00</span></div>
           <input id="kd" type="range" min="0" max="80" step="0.05" value="0" />
@@ -117,7 +117,7 @@
   </div>
 
   <!-- Footer disclaimer -->
-  <p class="page-note">Created for Embedded Systems Laboratory course; University of Twente. Use with caution: step response may not be accurate. Validate with a proper simulation program such as 20-sim or Matlab.</p>
+  <p class="page-note">Controller: u = Kp·e + Ki·∫e dt − Kd·dy/dt (the derivative acts on the output, not on the error). F acts continuously, also before the step. Created for Embedded Systems Laboratory course; University of Twente. Use with caution: step response may not be accurate. Validate with a proper simulation program such as 20-sim or Matlab.</p>
 
   <!-- All simulation logic, DOM wiring, and chart rendering live in pid.js -->
   <script src="pid.js"></script>

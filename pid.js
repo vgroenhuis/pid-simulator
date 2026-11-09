@@ -85,7 +85,38 @@ function updateValueLabels(p) {
 
 // ─── Simulation ──────────────────────────────────────────────────────────────
 
-// Simulate the closed-loop step response using forward Euler integration.
+// Closed-loop characteristic polynomial coefficients [a3, a2, a1, a0] of
+//   m·s³ + (c+Kd)·s² + (k+Kp)·s + Ki
+function characteristicCoefficients(p) {
+  return [p.m, p.c + p.kd, p.k + p.kp, p.ki];
+}
+
+// Classify the closed loop as "stable", "marginal" or "unstable" with the
+// Routh-Hurwitz criterion. With Ki = 0 the factor s cancels (the integrator is
+// not connected), leaving the second-order loop m·s² + (c+Kd)·s + (k+Kp).
+function closedLoopStability(p) {
+  const [a3, a2, a1, a0] = characteristicCoefficients(p);
+  if (a0 === 0) return a2 > 0 && a1 > 0 ? "stable" : "marginal";
+  if (a2 <= 0 || a1 <= 0) return "unstable";
+
+  const margin = a2 * a1 - a3 * a0;
+  if (Math.abs(margin) <= 1e-9 * Math.max(a2 * a1, a3 * a0)) return "marginal";
+  return margin > 0 ? "stable" : "unstable";
+}
+
+// The state the loop rests in before the step (r = 0) under the constant force F:
+//   Ki > 0           : x = 0, and the integrator already cancels F.
+//   Ki = 0, k+Kp > 0 : x = F / (k+Kp), a static offset.
+//   otherwise        : no equilibrium exists; F is held off until the step.
+function preStepEquilibrium(p) {
+  if (p.ki > 0) return { x: 0, integral: -p.f / p.ki, exists: true };
+  const stiffness = p.k + p.kp;
+  if (stiffness > 0) return { x: p.f / stiffness, integral: 0, exists: true };
+  return { x: 0, integral: 0, exists: false };
+}
+
+// Simulate the closed-loop step response using semi-implicit (symplectic) Euler
+// integration, starting from the pre-step equilibrium.
 //
 // Plant model (mass-spring-damper):
 //   m·ẍ + c·ẋ + k·x = u + f
@@ -94,131 +125,108 @@ function updateValueLabels(p) {
 //   u = Kp·e + Ki·∫e dt - Kd·(dy/dt)
 //   where e = r − x  (error between unit step reference r=1 and output x)
 //   Note: Derivative acts on output (not error) to avoid derivative kick on setpoint changes.
+//   The derivative is unfiltered and the integrator has no anti-windup clamp.
 //
-// The derivative term is low-pass filtered to reduce noise amplification.
-// The integral term is clamped (anti-windup) to prevent integrator saturation.
-// Returns arrays of time, output y, and reference ref, plus a stability flag.
+// Each plotted sample is integrated in several sub-steps, which keeps the
+// integration stable over the whole slider range.
+// Returns arrays of time, output y, and reference ref.
 function simulateStepResponse(params) {
   const tStart = -1; // start time (s)
   const tEnd = 12;   // end time (s)
-  const dt = 0.004;  // fixed time step (s)
+  const dt = 0.004;  // plotted sample spacing (s)
+  const subSteps = 10; // integration sub-steps per plotted sample
+  const h = dt / subSteps;
   const n = Math.floor((tEnd - tStart) / dt) + 1;
+  const stepIndex = Math.round(-tStart / dt); // sample at which the step occurs
 
   const time = new Array(n);
   const y = new Array(n);
   const ref = new Array(n);
 
-  let x = 0;
+  const equilibrium = preStepEquilibrium(params);
+  let x = equilibrium.x;
   let v = 0;
-  let integral = 0;
-  let prevX = 0;
-  let dFiltered = 0;
+  let integral = equilibrium.integral;
 
-  const dAlpha = 1;     // derivative low-pass filter coefficient (0=no filter, 1=no memory)
-  const maxAbsState = 1e4; // divergence threshold – marks simulation as unstable
-
-  let stable = true;
+  const maxAbsState = 1e4; // stop integrating beyond this; the plot would be meaningless
 
   for (let i = 0; i < n; i += 1) {
-    const t = tStart + i * dt;
-    const r = t >= 0 ? 1 : 0;
-    const error = r - x;
+    const r = i >= stepIndex ? 1 : 0;
+    const f = equilibrium.exists || i >= stepIndex ? params.f : 0;
 
-    integral += error * dt;
-    // integral anti-windup clamping disabled
+    time[i] = tStart + i * dt;
+    y[i] = x;
+    ref[i] = r;
 
-    const dOutput = (x - prevX) / dt;
-    dFiltered = dAlpha * dOutput + (1 - dAlpha) * dFiltered;
+    for (let s = 0; s < subSteps; s += 1) {
+      const error = r - x;
+      integral += error * h;
 
-    const u = params.kp * error + params.ki * integral - params.kd * dFiltered;
-    const a = (u + params.f - params.c * v - params.k * x) / params.m;
+      const u = params.kp * error + params.ki * integral - params.kd * v;
+      const a = (u + f - params.c * v - params.k * x) / params.m;
 
-    prevX = x;  // Save current x before updating
-    v += a * dt;
-    x += v * dt;
+      v += a * h;
+      x += v * h;
+    }
 
     if (!Number.isFinite(x) || !Number.isFinite(v) || Math.abs(x) > maxAbsState || Math.abs(v) > maxAbsState) {
-      stable = false;
-      for (let j = i; j < n; j += 1) {
+      for (let j = i + 1; j < n; j += 1) {
         time[j] = tStart + j * dt;
         y[j] = Number.NaN;
-        ref[j] = tStart + j * dt >= 0 ? 1 : 0;
+        ref[j] = j >= stepIndex ? 1 : 0;
       }
       break;
     }
-
-    time[i] = t;
-    y[i] = x;
-    ref[i] = r;
   }
 
-  return { time, y, ref, stable, dt };
+  return { time, y, ref };
 }
 
 // ─── Step-response metrics ───────────────────────────────────────────────────
 
-// Compute standard step-response performance metrics from the simulated output.
-//   Rise time   : time for output to go from 10 % to 90 % of the setpoint.
-//   Overshoot   : peak value above setpoint, expressed as % of setpoint.
-//   Settling time: first time the output stays within ±2 % of the final value.
-//   SSE         : absolute steady-state error  |1 − y_final|.
-// Settling band is centred on the actual final value (not necessarily setpoint)
-// to handle cases with non-zero steady-state error.
-function computeMetrics(time, y) {
-  const finitePairs = [];
-  for (let i = 0; i < y.length; i += 1) {
-    if (Number.isFinite(y[i])) finitePairs.push([time[i], y[i]]);
-  }
-  if (finitePairs.length < 2) {
-    return { riseTime: null, overshoot: null, settlingTime: null, sse: null };
-  }
+// Compute standard step-response performance metrics, using only samples from
+// the step onwards. y0 is the pre-step value and yFinal the exact steady state,
+// so the step size is Δ = yFinal − y0:
+//   Rise time    : time for output to go from 10 % to 90 % of Δ.
+//   Overshoot    : peak above yFinal, as % of Δ.
+//   Settling time: time after which the output stays within ±2 % of Δ around yFinal.
+//   SSE          : absolute steady-state error |1 − yFinal|.
+// All are unavailable (null) when the loop has no steady state, and all but SSE
+// when the reference is not connected (Kp = Ki = 0).
+function computeMetrics(time, y, params) {
+  const metrics = { riseTime: null, overshoot: null, settlingTime: null, sse: null };
+  if (closedLoopStability(params) !== "stable") return metrics;
 
-  const yFinal = finitePairs[finitePairs.length - 1][1];
-  const absFinalError = Math.abs(1 - yFinal);
+  const yFinal = params.ki > 0 ? 1 : (params.kp + params.f) / (params.k + params.kp);
+  metrics.sse = Math.abs(1 - yFinal);
+  if (params.kp === 0 && params.ki === 0) return metrics;
+
+  const y0 = preStepEquilibrium(params).x;
+  const delta = yFinal - y0;
+  const first = time.findIndex((t) => t >= -1e-9);
 
   let t10 = null;
   let t90 = null;
-  for (let i = 0; i < finitePairs.length; i += 1) {
-    const [t, yv] = finitePairs[i];
-    if (t10 === null && yv >= 0.1) t10 = t;
-    if (t90 === null && yv >= 0.9) {
-      t90 = t;
-      break;
-    }
-  }
-
-  const riseTime = t10 !== null && t90 !== null ? Math.max(0, t90 - t10) : null;
-
   let yPeak = -Infinity;
-  for (let i = 0; i < finitePairs.length; i += 1) {
-    if (finitePairs[i][1] > yPeak) yPeak = finitePairs[i][1];
+  for (let i = first; i < y.length; i += 1) {
+    if (t10 === null && y[i] >= y0 + 0.1 * delta) t10 = time[i];
+    if (t90 === null && y[i] >= y0 + 0.9 * delta) t90 = time[i];
+    if (y[i] > yPeak) yPeak = y[i];
   }
-  const overshoot = yPeak > 1 ? ((yPeak - 1) * 100) : 0;
+  if (t10 !== null && t90 !== null) metrics.riseTime = t90 - t10;
+  metrics.overshoot = (Math.max(0, yPeak - yFinal) / delta) * 100;
 
-  let settlingTime = null;
-  const settlingTarget = yFinal;
-  const band = 0.02 * Math.max(1, Math.abs(settlingTarget));
-  for (let i = 0; i < finitePairs.length; i += 1) {
-    const [t] = finitePairs[i];
-    let remainsInside = true;
-    for (let j = i; j < finitePairs.length; j += 1) {
-      if (Math.abs(finitePairs[j][1] - settlingTarget) > band) {
-        remainsInside = false;
-        break;
-      }
-    }
-    if (remainsInside) {
-      settlingTime = t;
-      break;
+  // Walk back from the end to the last sample outside the settling band.
+  // If the very last sample is still outside, the settling time stays null.
+  const band = 0.02 * delta;
+  for (let i = y.length - 1; i >= first; i -= 1) {
+    if (Math.abs(y[i] - yFinal) > band) {
+      if (i < y.length - 1) metrics.settlingTime = time[i + 1];
+      return metrics;
     }
   }
-
-  return {
-    riseTime,
-    overshoot,
-    settlingTime,
-    sse: absFinalError
-  };
+  metrics.settlingTime = 0;
+  return metrics;
 }
 
 // Format a numeric metric for display; returns "-" when value is unavailable.
@@ -279,9 +287,11 @@ function solveCubicRoots(a3, a2, a1, a0) {
 //
 // Strategy:
 //   1. Solve the cubic analytically.
-//   2. If dominant poles are complex  → ζ = −σ / |s|  (standard definition).
-//   3. If all dominant poles are real → use the two-real-pole equivalent
-//      ζ = (a+b) / (2√(ab))  where a, b are the pole magnitudes.
+//   2. If a complex pole pair exists → ζ = −σ / |s|  (standard definition).
+//      The pair is used even when a slower real pole exists, since it is the
+//      pair that determines whether the response oscillates.
+//   3. If all poles are real → use the two-real-pole equivalent of the two
+//      slowest poles: ζ = (a+b) / (2√(ab))  where a, b are the pole magnitudes.
 //   4. Sign convention: ζ < 0 for unstable systems (positive-real-part poles).
 function computeClosedLoopDampingRatio(params) {
   // Closed-loop denominator for unity feedback with PID on m*s^2 + c*s + k is:
@@ -323,7 +333,7 @@ function computeClosedLoopDampingRatio(params) {
 }
 
 // Map a damping ratio to a human-readable category label.
-//   ζ < 0          → unstable
+//   ζ < 0          → unstable  (ignoring rounding noise around zero)
 //   0 ≤ ζ ≤ 0.005  → undamped  (near-zero tolerance)
 //   |ζ−1| ≤ 0.02   → critically damped
 //   ζ < 1          → underdamped
@@ -334,8 +344,8 @@ function classifyDampingType(zeta) {
   const zeroTol = 0.005;
   const critTol = 0.02;
 
-  if (zeta < 0) return "unstable";
-  if (zeta >= 0 && zeta <= zeroTol) return "undamped";
+  if (zeta < -1e-9) return "unstable";
+  if (zeta <= zeroTol) return "undamped";
   if (Math.abs(zeta - 1) <= critTol) return "critically damped";
   if (zeta < 1) return "underdamped";
   return "overdamped";
@@ -391,7 +401,7 @@ function drawPlot(time, ref, y, autoScaleY) {
   ctx.strokeStyle = "rgba(31, 42, 31, 0.12)";
   ctx.lineWidth = 1;
   const gx = 8;
-  const gy = 6;
+  const gy = 4; // same number of divisions as the Y-axis labels below
   for (let i = 0; i <= gx; i += 1) {
     const x = pad.left + (i / gx) * plotW;
     ctx.beginPath();
@@ -406,6 +416,12 @@ function drawPlot(time, ref, y, autoScaleY) {
     ctx.lineTo(pad.left + plotW, yLine);
     ctx.stroke();
   }
+
+  // Keep the curves inside the plot area when the output exceeds a fixed Y-axis.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(pad.left, pad.top, plotW, plotH);
+  ctx.clip();
 
   ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--line-ref").trim();
   ctx.lineWidth = 1.8;
@@ -434,6 +450,7 @@ function drawPlot(time, ref, y, autoScaleY) {
     }
   }
   ctx.stroke();
+  ctx.restore();
 
   ctx.strokeStyle = "rgba(31, 42, 31, 0.5)";
   ctx.lineWidth = 1.2;
@@ -461,8 +478,8 @@ function drawPlot(time, ref, y, autoScaleY) {
     ctx.fillText(tt.toFixed(1), x - 8, pad.top + plotH + 16);
   }
   ctx.textAlign = "right";
-  for (let i = 0; i <= 4; i += 1) {
-    const yy = yMin + (i / 4) * (yMax - yMin);
+  for (let i = 0; i <= gy; i += 1) {
+    const yy = yMin + (i / gy) * (yMax - yMin);
     const yPx = ty(yy);
     ctx.fillText(yy.toFixed(2), pad.left - 6, yPx + 4);
   }
@@ -489,7 +506,7 @@ function updateAll() {
   drawPlot(sim.time, sim.ref, sim.y, autoScaleYEl.checked);
   const zeta = computeClosedLoopDampingRatio(p);
 
-  const m = computeMetrics(sim.time, sim.y);
+  const m = computeMetrics(sim.time, sim.y, p);
   metricsEl.rise.textContent = formatMetric(m.riseTime, " s");
   metricsEl.overshoot.textContent = formatMetric(m.overshoot, " %", 2);
   metricsEl.settling.textContent = formatMetric(m.settlingTime, " s");
@@ -497,8 +514,14 @@ function updateAll() {
   metricsEl.dampingRatio.textContent = formatMetric(zeta, "", 3);
   metricsEl.dampingType.textContent = classifyDampingType(zeta);
 
-  if (!sim.stable) {
-    statusEl.textContent = "Unstable / divergent response detected. Reduce gains or increase damping.";
+  const stability = closedLoopStability(p);
+  const controlled = p.kp > 0 || p.ki > 0;
+  if (stability === "unstable") {
+    statusEl.textContent = "Unstable closed loop: the response diverges. Reduce gains or increase damping.";
+  } else if (stability === "marginal" && controlled) {
+    statusEl.textContent = "Marginally stable: the response keeps oscillating and has no steady state.";
+  } else if (stability === "stable" && controlled && m.settlingTime === null) {
+    statusEl.textContent = "Still settling at the end of the plot, so the settling time is unavailable.";
   } else {
     statusEl.textContent = "";
   }
